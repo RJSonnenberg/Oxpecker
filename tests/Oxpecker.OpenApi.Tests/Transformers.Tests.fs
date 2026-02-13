@@ -34,7 +34,8 @@ module WebApp =
                                 services
                                     .AddRouting()
                                     .AddOpenApi(fun o ->
-                                        o.AddSchemaTransformer<FSharpOptionSchemaTransformer>() |> ignore)
+                                        o.AddSchemaTransformer<FSharpOptionSchemaTransformer>() |> ignore
+                                        o.AddSchemaTransformer<FSharpUnionSchemaTransformer>() |> ignore)
                                 |> ignore)
                         |> ignore)
                     .Build()
@@ -60,6 +61,7 @@ module WebApp =
                                     .AddRouting()
                                     .AddOpenApi(fun o ->
                                         o.AddSchemaTransformer<FSharpOptionSchemaTransformer>() |> ignore
+                                        o.AddSchemaTransformer<FSharpUnionSchemaTransformer>() |> ignore
                                         o.CreateSchemaReferenceId <- _.Type.FullName)
                                 |> ignore)
                         |> ignore)
@@ -473,6 +475,893 @@ let ``Additional configuration works fine`` () =
           }
         },
         "description": "Inner type description"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Oxpecker.OpenApi.Tests"
+    }
+  ]
+}"""
+        resultString.ReplaceLineEndings() |> shouldEqual expected
+    }
+
+// F# Union Types Tests
+
+type SimpleUnion =
+    | Active
+    | Inactive
+    | Pending
+
+type SimpleUnionResponse = { Status: SimpleUnion }
+
+[<Fact>]
+let ``Simple union types generate string enum schema`` () =
+    task {
+        let endpoints = [
+            GET [ route "/" <| text "Hello World" |> addOpenApiSimple<unit, SimpleUnionResponse> ]
+        ]
+        use! server = WebApp.webApp endpoints
+        let client = server.GetTestClient()
+
+        let! result = client.GetAsync("/openapi/v1.json")
+        let! resultString = result.Content.ReadAsStringAsync()
+
+        result.StatusCode |> shouldEqual HttpStatusCode.OK
+        let expected =
+            """{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Oxpecker.OpenApi.Tests | v1",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost/"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "Oxpecker.OpenApi.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimpleUnionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "SimpleUnion": {
+        "enum": [
+          "Active",
+          "Inactive",
+          "Pending"
+        ],
+        "type": "string",
+        "description": "F# union type with values: Active, Inactive, Pending"
+      },
+      "SimpleUnionResponse": {
+        "required": [
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/SimpleUnion"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Oxpecker.OpenApi.Tests"
+    }
+  ]
+}"""
+        resultString.ReplaceLineEndings() |> shouldEqual expected
+    }
+
+type ComplexUnion =
+    | Circle of Radius: float
+    | Rectangle of Width: float * Height: float
+    | Point
+
+type ComplexUnionRequest = { Shape: ComplexUnion }
+
+[<Fact>]
+let ``Complex union types generate oneOf with discriminator`` () =
+    task {
+        let endpoints = [
+            POST [ route "/" <| text "Hello World" |> addOpenApiSimple<ComplexUnionRequest, unit> ]
+        ]
+        use! server = WebApp.webApp endpoints
+        let client = server.GetTestClient()
+
+        let! result = client.GetAsync("/openapi/v1.json")
+        let! resultString = result.Content.ReadAsStringAsync()
+
+        result.StatusCode |> shouldEqual HttpStatusCode.OK
+        let expected =
+            """{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Oxpecker.OpenApi.Tests | v1",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost/"
+    }
+  ],
+  "paths": {
+    "/": {
+      "post": {
+        "tags": [
+          "Oxpecker.OpenApi.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComplexUnionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ComplexUnion": {
+        "oneOf": [
+          {
+            "required": [
+              "type",
+              "radius"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "Circle"
+                ],
+                "type": "string"
+              },
+              "radius": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "description": "Union case: Circle with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "width",
+              "height"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "Rectangle"
+                ],
+                "type": "string"
+              },
+              "width": {
+                "type": "number",
+                "format": "double"
+              },
+              "height": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "description": "Union case: Rectangle with 2 field(s)"
+          },
+          {
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "Point"
+                ],
+                "type": "string"
+              }
+            },
+            "description": "Union case: Point"
+          }
+        ],
+        "description": "F# discriminated union type with cases: Circle, Rectangle, Point",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "Circle": "#/components/schemas/ComplexUnion.Circle",
+            "Rectangle": "#/components/schemas/ComplexUnion.Rectangle",
+            "Point": "#/components/schemas/ComplexUnion.Point"
+          }
+        }
+      },
+      "ComplexUnion.Circle": {
+        "required": [
+          "type",
+          "radius"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "Circle"
+            ],
+            "type": "string"
+          },
+          "radius": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "description": "Union case: Circle with 1 field(s)"
+      },
+      "ComplexUnion.Point": {
+        "required": [
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "Point"
+            ],
+            "type": "string"
+          }
+        },
+        "description": "Union case: Point"
+      },
+      "ComplexUnion.Rectangle": {
+        "required": [
+          "type",
+          "width",
+          "height"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "Rectangle"
+            ],
+            "type": "string"
+          },
+          "width": {
+            "type": "number",
+            "format": "double"
+          },
+          "height": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "description": "Union case: Rectangle with 2 field(s)"
+      },
+      "ComplexUnionRequest": {
+        "required": [
+          "shape"
+        ],
+        "type": "object",
+        "properties": {
+          "shape": {
+            "$ref": "#/components/schemas/ComplexUnion"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Oxpecker.OpenApi.Tests"
+    }
+  ]
+}"""
+        resultString.ReplaceLineEndings() |> shouldEqual expected
+    }
+
+type UnionWithPrimitives =
+    | IntValue of Value: int
+    | StringValue of Value: string
+    | BoolValue of Value: bool
+    | GuidValue of Value: Guid
+
+type UnionWithPrimitivesResponse = { Data: UnionWithPrimitives }
+
+[<Fact>]
+let ``Union with various primitive types maps correctly`` () =
+    task {
+        let endpoints = [
+            GET [ route "/" <| text "Hello World" |> addOpenApiSimple<unit, UnionWithPrimitivesResponse> ]
+        ]
+        use! server = WebApp.webApp endpoints
+        let client = server.GetTestClient()
+
+        let! result = client.GetAsync("/openapi/v1.json")
+        let! resultString = result.Content.ReadAsStringAsync()
+
+        result.StatusCode |> shouldEqual HttpStatusCode.OK
+        let expected =
+            """{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Oxpecker.OpenApi.Tests | v1",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost/"
+    }
+  ],
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "Oxpecker.OpenApi.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnionWithPrimitivesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "UnionWithPrimitives": {
+        "oneOf": [
+          {
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "IntValue"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "description": "Union case: IntValue with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "StringValue"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "description": "Union case: StringValue with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "BoolValue"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "boolean"
+              }
+            },
+            "description": "Union case: BoolValue with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "value"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "GuidValue"
+                ],
+                "type": "string"
+              },
+              "value": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "description": "Union case: GuidValue with 1 field(s)"
+          }
+        ],
+        "description": "F# discriminated union type with cases: IntValue, StringValue, BoolValue, GuidValue",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "IntValue": "#/components/schemas/UnionWithPrimitives.IntValue",
+            "StringValue": "#/components/schemas/UnionWithPrimitives.StringValue",
+            "BoolValue": "#/components/schemas/UnionWithPrimitives.BoolValue",
+            "GuidValue": "#/components/schemas/UnionWithPrimitives.GuidValue"
+          }
+        }
+      },
+      "UnionWithPrimitives.BoolValue": {
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "BoolValue"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "boolean"
+          }
+        },
+        "description": "Union case: BoolValue with 1 field(s)"
+      },
+      "UnionWithPrimitives.GuidValue": {
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "GuidValue"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "description": "Union case: GuidValue with 1 field(s)"
+      },
+      "UnionWithPrimitives.IntValue": {
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "IntValue"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "description": "Union case: IntValue with 1 field(s)"
+      },
+      "UnionWithPrimitives.StringValue": {
+        "required": [
+          "type",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "StringValue"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "description": "Union case: StringValue with 1 field(s)"
+      },
+      "UnionWithPrimitivesResponse": {
+        "required": [
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UnionWithPrimitives"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Oxpecker.OpenApi.Tests"
+    }
+  ]
+}"""
+        resultString.ReplaceLineEndings() |> shouldEqual expected
+    }
+
+type RecordPayload = { Id: Guid; Name: string }
+
+type NestedUnion =
+    | Alpha
+    | Beta of Code: int
+
+type UnionWithComplexFields =
+    | WithRecord of Payload: RecordPayload
+    | WithNestedUnion of Choice: NestedUnion
+    | WithBoth of Payload: RecordPayload * Choice: NestedUnion
+
+type UnionWithComplexFieldsRequest = { Data: UnionWithComplexFields }
+type UnionWithComplexFieldsResponse = { Data: UnionWithComplexFields }
+
+[<Fact>]
+let ``Union with record and nested union fields maps correctly`` () =
+    task {
+        let endpoints = [
+            POST [ route "/" <| text "Hello World" |> addOpenApiSimple<UnionWithComplexFieldsRequest, UnionWithComplexFieldsResponse> ]
+        ]
+        use! server = WebApp.webApp endpoints
+        let client = server.GetTestClient()
+
+        let! result = client.GetAsync("/openapi/v1.json")
+        let! resultString = result.Content.ReadAsStringAsync()
+
+        result.StatusCode |> shouldEqual HttpStatusCode.OK
+        let expected =
+            """{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Oxpecker.OpenApi.Tests | v1",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost/"
+    }
+  ],
+  "paths": {
+    "/": {
+      "post": {
+        "tags": [
+          "Oxpecker.OpenApi.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnionWithComplexFieldsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnionWithComplexFieldsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "NestedUnion": {
+        "oneOf": [
+          {
+            "required": [
+              "type"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "Alpha"
+                ],
+                "type": "string"
+              }
+            },
+            "description": "Union case: Alpha"
+          },
+          {
+            "required": [
+              "type",
+              "code"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "Beta"
+                ],
+                "type": "string"
+              },
+              "code": {
+                "type": "integer",
+                "format": "int32"
+              }
+            },
+            "description": "Union case: Beta with 1 field(s)"
+          }
+        ],
+        "description": "F# discriminated union type with cases: Alpha, Beta",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "Alpha": "#/components/schemas/NestedUnion.Alpha",
+            "Beta": "#/components/schemas/NestedUnion.Beta"
+          }
+        }
+      },
+      "NestedUnion.Alpha": {
+        "required": [
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "Alpha"
+            ],
+            "type": "string"
+          }
+        },
+        "description": "Union case: Alpha"
+      },
+      "NestedUnion.Beta": {
+        "required": [
+          "type",
+          "code"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "Beta"
+            ],
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "description": "Union case: Beta with 1 field(s)"
+      },
+      "RecordPayload": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "UnionWithComplexFields": {
+        "oneOf": [
+          {
+            "required": [
+              "type",
+              "payload"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "WithRecord"
+                ],
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/RecordPayload"
+              }
+            },
+            "description": "Union case: WithRecord with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "choice"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "WithNestedUnion"
+                ],
+                "type": "string"
+              },
+              "choice": {
+                "$ref": "#/components/schemas/NestedUnion"
+              }
+            },
+            "description": "Union case: WithNestedUnion with 1 field(s)"
+          },
+          {
+            "required": [
+              "type",
+              "payload",
+              "choice"
+            ],
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": [
+                  "WithBoth"
+                ],
+                "type": "string"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/RecordPayload"
+              },
+              "choice": {
+                "$ref": "#/components/schemas/NestedUnion"
+              }
+            },
+            "description": "Union case: WithBoth with 2 field(s)"
+          }
+        ],
+        "description": "F# discriminated union type with cases: WithRecord, WithNestedUnion, WithBoth",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "WithRecord": "#/components/schemas/UnionWithComplexFields.WithRecord",
+            "WithNestedUnion": "#/components/schemas/UnionWithComplexFields.WithNestedUnion",
+            "WithBoth": "#/components/schemas/UnionWithComplexFields.WithBoth"
+          }
+        }
+      },
+      "UnionWithComplexFields.WithBoth": {
+        "required": [
+          "type",
+          "payload",
+          "choice"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "WithBoth"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RecordPayload"
+          },
+          "choice": {
+            "$ref": "#/components/schemas/NestedUnion"
+          }
+        },
+        "description": "Union case: WithBoth with 2 field(s)"
+      },
+      "UnionWithComplexFields.WithNestedUnion": {
+        "required": [
+          "type",
+          "choice"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "WithNestedUnion"
+            ],
+            "type": "string"
+          },
+          "choice": {
+            "$ref": "#/components/schemas/NestedUnion"
+          }
+        },
+        "description": "Union case: WithNestedUnion with 1 field(s)"
+      },
+      "UnionWithComplexFields.WithRecord": {
+        "required": [
+          "type",
+          "payload"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "WithRecord"
+            ],
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RecordPayload"
+          }
+        },
+        "description": "Union case: WithRecord with 1 field(s)"
+      },
+      "UnionWithComplexFieldsRequest": {
+        "required": [
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UnionWithComplexFields"
+          }
+        }
+      },
+      "UnionWithComplexFieldsResponse": {
+        "required": [
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/UnionWithComplexFields"
+          }
+        }
       }
     }
   },
