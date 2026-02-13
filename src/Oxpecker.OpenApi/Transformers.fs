@@ -113,6 +113,7 @@ type FSharpOptionSchemaTransformer() =
             }
             :> Task
 
+
 module private UnionHelpers =
     /// Create schema for primitive field types; returns None for complex types that should be resolved via OpenAPI.
     let tryCreatePrimitiveFieldSchema (fieldType: Type) =
@@ -274,6 +275,9 @@ module private UnionHelpers =
     let generateCaseSchemaAsync
         (case: UnionCaseInfo)
         (ctx: OpenApiSchemaTransformerContext)
+        (unionSchemaId: string)
+        (schemas: IDictionary<string, IOpenApiSchema>)
+        (document: OpenApiDocument)
         (ct: CancellationToken)
         =
         task {
@@ -296,8 +300,12 @@ module private UnionHelpers =
                 match tryCreatePrimitiveFieldSchema field.PropertyType with
                 | Some schema -> properties.[fieldName] <- schema
                 | None ->
-                    let! fieldSchema = ctx.GetOrCreateSchemaAsync(field.PropertyType, null, ct)
-                    properties.[fieldName] <- fieldSchema
+                    let fieldTypeName = field.PropertyType.Name
+                    if fieldTypeName = unionSchemaId && schemas.ContainsKey(unionSchemaId) then
+                        properties.[fieldName] <- schemas[unionSchemaId]
+                    else
+                        let! fieldSchema = ctx.GetOrCreateSchemaAsync(field.PropertyType, null, ct)
+                        properties.[fieldName] <- fieldSchema
             caseSchema.Properties <- properties
             caseSchema.Required <- required
             caseSchema.Description <-
@@ -336,9 +344,16 @@ module private UnionHelpers =
                     let created = Dictionary<string, IOpenApiSchema>()
                     components.Schemas <- created
                     created
+
+            // Register the union type schema early to prevent infinite recursion
+            // when processing recursive types (e.g., list types that reference themselves)
+            let unionSchemaId = unionType.Name
+            if not (schemas.ContainsKey unionSchemaId) then
+                schemas[unionSchemaId] <- schema
+
             let mapping = Dictionary<string, OpenApiSchemaReference>()
             for caseInfo in cases do
-                let! caseSchema = generateCaseSchemaAsync caseInfo ctx ct
+                let! caseSchema = generateCaseSchemaAsync caseInfo ctx unionSchemaId schemas document ct
                 let caseSchemaId = sprintf "%s.%s" unionType.Name caseInfo.Name
                 if not (schemas.ContainsKey caseSchemaId) then
                     schemas[caseSchemaId] <- caseSchema
